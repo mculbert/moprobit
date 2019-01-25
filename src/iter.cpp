@@ -453,35 +453,35 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                   double u = R::runif(0,1);
                   if (R > 0 || log(u) < R)
 #else
-                    if (R > 0 || log(R::runif(0,1)) < R)
+                  if (R > 0 || log(R::runif(0,1)) < R)
 #endif
-{
-  Z(I,j) = Zstar(i,j);
-  E(I,j) = Estar(i,j);
-  mu(I,j) = Z(I,j) - E(I,j);
-  
-  // Y
-  if (K[j] == 0)
-    as<NumericVector>(Y[j])[I] = as<NumericVector>(Ystar[Ystar.ncol()-1])[i];
-  else if (Ybool[j])
-    as<LogicalVector>(Y[j])[I] = as<LogicalVector>(Ystar[Ystar.ncol()-1])[i];
-  else
-    as<IntegerVector>(Y[j])[I] = as<IntegerVector>(Ystar[Ystar.ncol()-1])[i];
-  
-  // X
-  for (int J = 0; J < Nupdate; J++)
-    X(I, update_to[J]-1) = Xstar(i, update_to[J]-1);
-  
-  // Downstream outcomes
-  for (int J = 0; J < update_cascade.size(); J++)
-  {
-    const int JJ = update_cascade[J]-1;
-    E(I,JJ) = Estar(i,JJ);
-    mu(I,JJ) = Z(I,JJ) - E(I,JJ);
-  }
-  
-  num_accepted_Z += 1;
-} // accept this individual's proposal
+                  {
+                    Z(I,j) = Zstar(i,j);
+                    E(I,j) = Estar(i,j);
+                    mu(I,j) = Z(I,j) - E(I,j);
+                    
+                    // Y
+                    if (K[j] == 0)
+                      as<NumericVector>(Y[j])[I] = as<NumericVector>(Ystar[Ystar.ncol()-1])[i];
+                    else if (Ybool[j])
+                      as<LogicalVector>(Y[j])[I] = as<LogicalVector>(Ystar[Ystar.ncol()-1])[i];
+                    else
+                      as<IntegerVector>(Y[j])[I] = as<IntegerVector>(Ystar[Ystar.ncol()-1])[i];
+                    
+                    // X
+                    for (int J = 0; J < Nupdate; J++)
+                      X(I, update_to[J]-1) = Xstar(i, update_to[J]-1);
+                    
+                    // Downstream outcomes
+                    for (int J = 0; J < update_cascade.size(); J++)
+                    {
+                      const int JJ = update_cascade[J]-1;
+                      E(I,JJ) = Estar(i,JJ);
+                      mu(I,JJ) = Z(I,JJ) - E(I,JJ);
+                    }
+                    
+                    num_accepted_Z += 1;
+                  } // accept this individual's proposal
                 } // each individual with missing j
             } // sample outcome that is also a predictor
             
