@@ -157,13 +157,8 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
         // Conditional mean/sd for Z_j|Z_-j
         // mu_j <- mu[,j] - E[,-j, drop=F] %*% (Omega[-j,j, drop=F] / Omega[j,j])
         // sd_j <- 1/sqrt(Omega[j,j])
-        //  FIXME: REWRITE AS SINGLE STATEMENT WITH SIZE-0 MATRIX
-        VectorXd adj = (j == 0 ? E.rightCols(q-1) * (Omega.bottomRows(q-1).col(0) / Omega(0,0))
-                          : E.leftCols(j) * (Omega.topRows(j).col(j) / Omega(j,j)) );
-        // Leave out interior column j
-        if (j != 0 && j != q-1)
-          adj += E.rightCols(q-j-1) * (Omega.bottomRows(q-j-1).col(j) / Omega(j,j));
-        const VectorXd mu_j = mu.col(j) - adj;
+        const VectorXd mu_j = mu.col(j) - (E.leftCols(j) * (Omega.topRows(j).col(j) / Omega(j,j)) +
+                                           E.rightCols(q-j-1) * (Omega.bottomRows(q-j-1).col(j) / Omega(j,j)) );
         const double sd_j = 1./sqrt(Omega(j,j));
         
         // Discrete variable
