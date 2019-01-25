@@ -1,10 +1,10 @@
 useDynLib(moprobit, .registration=TRUE)
 export(moprobit_init, moprobit_iter, moprobit_chain, rCIW)
 export(chain_to_mcmc, get_toc, get_acf, Rhat)
+export(clean_state, derive_state)
 importFrom(Rcpp, evalCpp)
 import(dplyr, tidyr)
 importFrom(stats, setNames, model.frame, model.matrix, acf, formula, na.pass,
            lm, coef, var, sd, residuals, glm, binomial, terms)
 importFrom(Matrix, Matrix)
 importFrom(coda, as.mcmc)
-
