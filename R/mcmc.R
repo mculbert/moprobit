@@ -176,7 +176,7 @@ moprobit_init <- function(formulas, dataset, sd_tau, meas_err = NULL, contrasts 
       # Predictors for this block
       p.j <- env$p.block[,g]
       Xtilde <- state$X[,p.j]
-      if (p > 1)
+      if (sum(p.j) > 1)
         Xtilde0 <- if (colnames(Xtilde)[1] == '(Intercept)') Xtilde[,-1] else Xtilde
       # Each outcome in this block
       for (j in which(env$q.block[,g])) {
@@ -190,7 +190,7 @@ moprobit_init <- function(formulas, dataset, sd_tau, meas_err = NULL, contrasts 
           state$D_inv_Sigma[j,j] <- 1/state$L_Sigma[j,j]
         } else if (env$K[j] == 2) {
           # This is a binary outcome
-          state$beta[p.j, j] <- coef(glm(state$Y[,j] ~ 0 + Xtilde), binomial(link='probit'))
+          state$beta[p.j, j] <- coef(glm(state$Y[,j] ~ 0 + Xtilde, binomial(link='probit')))
           state$tau[[j]] <- 0
         } else {
           # This is an ordinal outcome
