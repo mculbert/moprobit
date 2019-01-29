@@ -198,13 +198,14 @@ moprobit_init <- function(formulas, dataset, sd_tau, meas_err = NULL, contrasts 
             m <- MASS::polr(factor(state$Y[,j]) ~ Xtilde0, method = 'probit')
           else
             m <- MASS::polr(factor(state$Y[,j]) ~ 1, method = 'probit')
+          if (any(is.na(m$zeta)) || (length(m$coefficients) != (sum(p.j)-1)))
+            stop("Error initializing coefficients for ", colnames(state$Z)[j], " from ordinal probit model. ",
+                 "Check for linear dependence in predictors or try initZero = TRUE.")
           state$beta[p.j, j] <- c(m$zeta[1], m$coefficients)
           state$tau[[j]] <- c(0, m$zeta[-1] - m$zeta[1])
-          if (any(is.na(state$tau[[j]])))
-            stop("Error initializing thresholds for block ", names(formulas)[g], "from ordinal probit model. Try initZero = TRUE.")
         }
         if (any(is.na(state$beta[p.j, j])))
-          stop("Error initializing coefficients for block ", names(formulas)[j], "from independent models. ",
+          stop("Error initializing coefficients for block ", names(formulas)[g], " from independent models. ",
                "Check for linear dependence in predictors or try initZero = TRUE.")
       }
     }
