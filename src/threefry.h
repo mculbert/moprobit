@@ -47,7 +47,7 @@
  *
  * The output is initialized by the sum of the counter and key:
  *   x[0] = p[0] + k[0]
- *   x[1] = x[1] + k[1]
+ *   x[1] = p[1] + k[1]
  *
  * The algorithm proceeds in a series of "mix" operations, consisting of
  *   an add, a rotation, and an exclusive-or:
