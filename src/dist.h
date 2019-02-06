@@ -2,15 +2,13 @@
 #ifndef MOPROBIT_DIST_H
 #define MOPROBIT_DIST_H
 
-// FIXME: Switch to Threefry RNG
-#include <Rcpp.h>
-
 #ifdef MOPROBIT_DIST_USE_R
 #include <Rcpp.h>
 #else
 // [[Rcpp::depends(BH)]]
 #include <math.h>
 #include <boost/math/special_functions.hpp>
+#include "threefry.h"
 #endif
 
 #ifndef NAN
@@ -26,20 +24,43 @@
 
 namespace moprobit { namespace dist {
 
+#ifdef MOPROBIT_DIST_USE_R
+  // Counter and Key are ignored when using R implementation
+  typedef uint64_t Counter;
+  typedef uint64_t Key;
+#endif
+
 
 /************ Uniform distribution ************/
 
 
-inline double runif()
+inline double runif(const Counter &n, const Key &k)
 {
+#ifdef MOPROBIT_DIST_USE_R
   return R::runif(0, 1);
+#else
+  return U64_TO_D01(threefry2x64_20(n, k).i0);
+#endif
 }
 
-inline double runif(double a, double b)
+inline void runif2(const Counter &n, const Key &k, double &u1, double &u2)
+{
+#ifdef MOPROBIT_DIST_USE_R
+  u1 = R::runif(0, 1);
+  u2 = R::runif(0, 1);
+#else
+  Counter x = threefry2x64_20(n, k);
+  u1 = U64_TO_D01(x.i0);
+  u2 = U64_TO_D01(x.i1);
+#endif
+}
+
+inline double runif(double a, double b, const Counter &n, const Key &k, double u = -1)
 {
   if (a > b || isinf(a) || isinf(b)) return NAN;
   if (a == b) return a;
-  return a + (b-a) * runif();
+  if (u == -1) u = runif(n, k);
+  return a + (b-a) * u;
 }
 
 
@@ -103,74 +124,82 @@ inline double qnorm(double x, double mu, double sd)
 }
 
 
-inline double rnorm()
+inline double rnorm(const Counter &n, const Key &k, double u = -1)
 {
 #ifdef MOPROBIT_DIST_USE_R
   return R::rnorm(0, 1);
 #else
-  return qnorm(runif());
+  if (u == -1) u = runif(n, k);
+  return qnorm(u);
 #endif
 }
 
-inline double rnorm(double mu, double sd)
+inline double rnorm(double mu, double sd, const Counter &n, const Key &k, double u = -1)
 {
   if (isinf(sd) || sd < 0) return NAN;
   if (sd == 0 || isinf(mu)) return mu;
-  return mu + sd * rnorm();
+  return mu + sd * rnorm(n, k, u);
 }
 
 
 /************ Truncated Normal distribution ************/
 
 
-inline double rtruncnorm(double a, double b)
+inline double rtruncnorm(double a, double b, const Counter &n, const Key &k, double u = -1)
 {
   if (a >= b)
   {
     if (a == b) return a;
     return NAN;
   }
-  return qnorm(runif(pnorm(a), pnorm(b)));
+  a = pnorm(a);
+  b = pnorm(b);
+  if (u == -1) u = runif(n, k);
+  return qnorm(a + (b-a) * u);
 }
 
-inline double rtruncnorm_lowertail(double b) // a = -Inf
+inline double rtruncnorm_lowertail(double b, const Counter &n, const Key &k, double u = -1) // a = -Inf
 {
-  return qnorm(runif(0, pnorm(b)));
+  b = pnorm(b);
+  if (u == -1) u = runif(n, k);
+  return qnorm(b * u);
 }
 
-inline double rtruncnorm_uppertail(double a) // b = Inf
+inline double rtruncnorm_uppertail(double a, const Counter &n, const Key &k, double u = -1) // b = Inf
 {
-  return qnorm(runif(pnorm(a), 1));
+  a = pnorm(a);
+  if (u == -1) u = runif(n, k);
+  return qnorm(a + (1-a) * u);
 }
 
-inline double rtruncnorm(double a, double b, double mu, double sd)
+inline double rtruncnorm(double a, double b, double mu, double sd, const Counter &n, const Key &k, double u = -1)
 {
   if (sd <= 0)
   {
     if (sd == 0 && a <= mu && mu <= b) return mu;
     return NAN;
   }
-  return mu + sd * rtruncnorm( (a - mu) / sd, (b - mu) / sd );
+  return mu + sd * rtruncnorm( (a - mu) / sd, (b - mu) / sd, n, k, u);
 }
 
-inline double rtruncnorm_lowertail(double b, double mu, double sd) // a = -Inf
+inline double rtruncnorm_lowertail(double b, double mu, double sd, const Counter &n, const Key &k, double u = -1) // a = -Inf
 {
   if (sd <= 0)
   {
     if (sd == 0 && mu <= b) return mu;
     return NAN;
   }
-  return mu + sd * rtruncnorm_lowertail( (b - mu) / sd );
+  return mu + sd * rtruncnorm_lowertail( (b - mu) / sd, n, k, u);
 }
 
-inline double rtruncnorm_uppertail(double a, double mu, double sd) // b = Inf
+inline double rtruncnorm_uppertail(double a, double mu, double sd, const Counter &n, const Key &k, double u = -1) // b = Inf
 {
   if (sd <= 0)
   {
     if (sd == 0 && a <= mu) return mu;
     return NAN;
   }
-  return mu + sd * rtruncnorm_uppertail( (a - mu) / sd );
+  return mu + sd * rtruncnorm_uppertail( (a - mu) / sd, n, k, u);
 }
 
 
@@ -210,12 +239,13 @@ inline double qInvGamma(double x, double shape, double scale)
 #endif
 }
 
-inline double rInvGamma(double shape, double scale)
+inline double rInvGamma(double shape, double scale, const Counter &n, const Key &k, double u = -1)
 {
 #ifdef MOPROBIT_DIST_USE_R
   return 1. / R::rgamma(shape, 1. / scale);
 #else
-  return qInvGamma(runif(), shape, scale);
+  if (u == -1) u = runif(n, k);
+  return qInvGamma(u, shape, scale);
 #endif
 }
 
@@ -223,7 +253,7 @@ inline double rInvGamma(double shape, double scale)
 /************ Truncated Inverse Gamma distribution ************/
 
 
-inline double rtruncInvGamma(double a, double b, double shape, double scale)
+inline double rtruncInvGamma(double a, double b, double shape, double scale, const Counter &n, const Key &k, double u = -1)
 {
   if (a < 0) a = 0;
   if (shape <= 0 || scale <= 0 || a >= b || b < 0)
@@ -232,20 +262,25 @@ inline double rtruncInvGamma(double a, double b, double shape, double scale)
     if (scale > 0 && shape > 0 && a == b && a > 0) return a;
     return NAN;
   }
-  return qInvGamma(runif(pInvGamma(a, shape, scale), pInvGamma(b, shape, scale)), shape, scale);
+  a = pInvGamma(a, shape, scale);
+  b = pInvGamma(b, shape, scale);
+  if (u == -1) u = runif(n, k);
+  return qInvGamma(a + (b-a) * u, shape, scale);
 }
 
-inline double rtruncInvGamma_lowertail(double b, double shape, double scale) // a = 0
+inline double rtruncInvGamma_lowertail(double b, double shape, double scale, const Counter &n, const Key &k, double u = -1) // a = 0
 {
   if (shape <= 0 || scale <= 0 || b <= 0)
   {
     if (scale > 0 && shape >= 0 && b >= 0) return 0;
     return NAN;
   }
-  return qInvGamma(runif(0, pInvGamma(b, shape, scale)), shape, scale);
+  b = pInvGamma(b, shape, scale);
+  if (u == -1) u = runif(n, k);
+  return qInvGamma(b * u, shape, scale);
 }
 
-inline double rtruncInvGamma_uppertail(double a, double shape, double scale) // b = Inf
+inline double rtruncInvGamma_uppertail(double a, double shape, double scale, const Counter &n, const Key &k, double u = -1) // b = Inf
 {
   if (a < 0) a = 0;
   if (shape <= 0 || scale <= 0 || isinf(a))
@@ -253,7 +288,9 @@ inline double rtruncInvGamma_uppertail(double a, double shape, double scale) // 
     if (scale > 0 && shape == 0 && a == 0) return 0;
     return NAN;
   }
-  return qInvGamma(runif(pInvGamma(a, shape, scale), 1), shape, scale);
+  a = pInvGamma(a, shape, scale);
+  if (u == -1) u = runif(n, k);
+  return qInvGamma(a + (1-a) * u, shape, scale);
 }
 
 

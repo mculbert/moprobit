@@ -26,6 +26,16 @@ using namespace Rcpp;
 #include "dist.h"
 #include "CIW.h"
 
+
+inline Eigen::MatrixXd rnorm_matrix(int r, int c, moprobit::dist::Counter &cnt, const moprobit::dist::Key &key)
+{
+  Eigen::ArrayXd x(r, c);
+  int num = r*c;
+  for (int i = 0; i < num; i++) x[i] = moprobit::dist::rnorm(++cnt, key);
+  return x.matrix();
+}
+
+
 // [[Rcpp::export]]
 List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bool fixCrossBlockCov, double eps)
 {
@@ -36,7 +46,15 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
   typedef Eigen::Map<MatrixXd> MapMatrix;
   
   static const Function modelmatrix("model.matrix");
-  
+
+#ifdef MOPROBIT_DIST_USE_R
+  const moprobit::dist::Key key = 0;
+#else
+  // Key to R's seed
+  const moprobit::dist::Key key = moprobit::dist::Key::from_R();
+#endif
+  moprobit::dist::Counter cnt;
+
   // Extract the MCMC setup
   const Environment env(as<Environment>(prior["env"]));      // Constants
   const int G = env["G"];                           // Number of grade-level blocks
@@ -114,7 +132,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
         // FIXME: Figure out templating for internal_CIW_eigen so we don't have to use these temporary objects
         MatrixXd L_Sigma_tmp(q,q);
         MatrixXd D_inv_Sigma_tmp(q,q);
-        internal_rCIW_eigen(df, resid2, fixed, eps, L_Sigma_tmp, D_inv_Sigma_tmp);
+        internal_rCIW_eigen(df, resid2, fixed, eps, L_Sigma_tmp, D_inv_Sigma_tmp, ++cnt, key);
         L_Sigma = L_Sigma_tmp;
         D_inv_Sigma = D_inv_Sigma_tmp;
       }
@@ -134,7 +152,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
           // FIXME: Figure out templating for internal_CIW_eigen so we don't have to use these temporary objects
           MatrixXd L_Sigma_tmp(q_g,q_g);
           MatrixXd D_inv_Sigma_tmp(q_g,q_g);
-          internal_rCIW_eigen(df, resid2, fixed[q_block.column(g)], eps, L_Sigma_tmp, D_inv_Sigma_tmp );
+          internal_rCIW_eigen(df, resid2, fixed[q_block.column(g)], eps, L_Sigma_tmp, D_inv_Sigma_tmp, ++cnt, key);
           L_Sigma.block(q_lt_g,q_lt_g, q_g,q_g) = L_Sigma_tmp;
           D_inv_Sigma.block(q_lt_g,q_lt_g, q_g,q_g) = D_inv_Sigma_tmp;
           
@@ -180,9 +198,9 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
             proposal[0] = 0;
             // Intermediate thresholds, k = 1:(K-3)
             for (int k=1; k < K[j]-2; k++)
-              proposal[k] = moprobit::dist::rtruncnorm(proposal[k-1], old[k+1], old[k], sd_tau);
+              proposal[k] = moprobit::dist::rtruncnorm(proposal[k-1], old[k+1], old[k], sd_tau, ++cnt, key);
             // Last threshold, k = K-2
-            proposal[K[j]-2] = moprobit::dist::rtruncnorm_uppertail(proposal[K[j]-3], old[K[j]-2], sd_tau);
+            proposal[K[j]-2] = moprobit::dist::rtruncnorm_uppertail(proposal[K[j]-3], old[K[j]-2], sd_tau, ++cnt, key);
             
             // Calculate the acceptance probability
             double R = 0;
@@ -217,10 +235,10 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
             //   Automatic acceptance if R >= 1
             num_attempted_tau += 1;
 #ifdef PEDANTIC
-            double u = moprobit::dist::runif();
+            double u = moprobit::dist::runif(++cnt, key);
             if (R < 1 && u > R)
 #else
-              if (R < 1 && moprobit::dist::runif() > R)
+              if (R < 1 && moprobit::dist::runif(++cnt, key) > R)
 #endif
                 goto step3;  // Reject
               num_accepted_tau += 1;
@@ -238,13 +256,13 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
             // upper <- c(tau[[j]], Inf)[Yj]
             if (y == 0)
               // lower = -Inf, upper = tau[Yj]
-              Z(I,j) = moprobit::dist::rtruncnorm_lowertail(tau_j[y], mu_j[I], sd_j);
+              Z(I,j) = moprobit::dist::rtruncnorm_lowertail(tau_j[y], mu_j[I], sd_j, ++cnt, key);
             else if (y == K[j]-1)
               // lower = tau[Yj-1], upper = Inf
-              Z(I,j) = moprobit::dist::rtruncnorm_uppertail(tau_j[y-1], mu_j[I], sd_j);
+              Z(I,j) = moprobit::dist::rtruncnorm_uppertail(tau_j[y-1], mu_j[I], sd_j, ++cnt, key);
             else
               // lower = tau[Yj-1], upper = tau[Yj]
-              Z(I,j) = moprobit::dist::rtruncnorm(tau_j[y-1], tau_j[y], mu_j[I], sd_j);
+              Z(I,j) = moprobit::dist::rtruncnorm(tau_j[y-1], tau_j[y], mu_j[I], sd_j, ++cnt, key);
             
             E(I,j) = Z(I,j) - mu(I,j);
           }
@@ -289,7 +307,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                 for (int i = 0; i < Nmis; i++)
                 {
                   const int I = mis[i];
-                  Yj[I] = Z(I,j) = moprobit::dist::rnorm(adj_mu_j[I], adj_sd_j[I]);
+                  Yj[I] = Z(I,j) = moprobit::dist::rnorm(adj_mu_j[I], adj_sd_j[I], ++cnt, key);
                   mu(I,j) = (X.row(I) * beta.col(j))(0,0);
                   E(I,j) = Z(I,j) - mu(I,j);
                 }
@@ -301,7 +319,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                 for (int i = 0; i < Nmis; i++)
                 {
                   const int I = mis[i];
-                  Z(I,j) = moprobit::dist::rnorm(mu_j[I], sd_j);
+                  Z(I,j) = moprobit::dist::rnorm(mu_j[I], sd_j, ++cnt, key);
                   Yj[I] = (Z(I,j) > 0);
                   mu(I,j) = (X.row(I) * beta.col(j))(0,0);
                   E(I,j) = Z(I,j) - mu(I,j);
@@ -315,7 +333,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                 for (int i = 0; i < Nmis; i++)
                 {
                   const int I = mis[i];
-                  Z(I,j) = moprobit::dist::rnorm(mu_j[I], sd_j);
+                  Z(I,j) = moprobit::dist::rnorm(mu_j[I], sd_j, ++cnt, key);
                   // factor(sapply(Z[mis, j], function(z) levels(env$Y[,j])[sum(z > tau[[j]])+1]), levels=levels(env$Y[,j]))
                   Yj[I] = sum(Z(I,j) > tau_j) + 1;
                   mu(I,j) = (X.row(I) * beta.col(j))(0,0);
@@ -332,7 +350,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
               {
                 const int I = mis[i];
                 Zstar.row(i) = Z.row(I);
-                Zstar(i,j) = moprobit::dist::rnorm(adj_mu_j[I], adj_sd_j[I]);
+                Zstar(i,j) = moprobit::dist::rnorm(adj_mu_j[I], adj_sd_j[I], ++cnt, key);
               }
               
               // Y.star
@@ -446,10 +464,10 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                   
                   // Accept
 #ifdef PEDANTIC
-                  double u = moprobit::dist::runif();
+                  double u = moprobit::dist::runif(++cnt, key);
                   if (R > 0 || log(u) < R)
 #else
-                  if (R > 0 || log(moprobit::dist::runif()) < R)
+                  if (R > 0 || log(moprobit::dist::runif(++cnt, key)) < R)
 #endif
                   {
                     Z(I,j) = Zstar(i,j);
@@ -523,7 +541,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                     L_Sigma.block(q_lt_g,0, q_g,q_lt_g).transpose() )
               ) +
                 // [std norm deviates] %*% t(L_Sigma[q.g, q.g])
-                MapMatrix(rnorm(p_g*q_g).begin(), p_g, q_g) *
+                rnorm_matrix(p_g, q_g, cnt, key) *
                 L_Sigma.block(q_lt_g,q_lt_g, q_g,q_g).triangularView<Lower>().transpose() );
         
         // Copy beta_g into sparse beta[p.g, q.g]

@@ -23,10 +23,21 @@
 #include <RcppEigen.h>
 using namespace Rcpp;
 
-#include "dist.h"
+#include "CIW.h"
+
+using moprobit::dist::Counter;
+using moprobit::dist::Key;
+
+inline Eigen::RowVectorXd rnorm_rowvec(uint64_t num, Counter &n, const Key &key)
+{
+  Eigen::RowVectorXd x(num);
+  for (int i = 0; i < num; i++) x[i] = moprobit::dist::rnorm(++n, key);
+  return x;
+}
 
 void internal_rCIW_eigen(double nu, const Eigen::MatrixXd &S, const LogicalVector fix, double eps,
-                        Eigen::MatrixXd &Lambda, Eigen::MatrixXd &Lambda_inv)
+                         Eigen::MatrixXd &Lambda, Eigen::MatrixXd &Lambda_inv,
+                         Counter &n, const Key &key)
 {
   using Eigen::MatrixXd;
   using Eigen::RowVectorXd;
@@ -46,7 +57,7 @@ void internal_rCIW_eigen(double nu, const Eigen::MatrixXd &S, const LogicalVecto
     }
     else
     {
-      const double g = sqrt(moprobit::dist::rInvGamma(nu_2, 0.5*S(0,0)));
+      const double g = sqrt(moprobit::dist::rInvGamma(nu_2, 0.5*S(0,0), n, key));
       Lambda(0,0) = g;
       Lambda_inv(0,0) = 1./g;
       return;
@@ -87,7 +98,7 @@ void internal_rCIW_eigen(double nu, const Eigen::MatrixXd &S, const LogicalVecto
   else
   {
     const double L_00 = L(0,0);
-    const double g = sqrt(moprobit::dist::rInvGamma(nu_2, 0.5*(L_00*L_00)));
+    const double g = sqrt(moprobit::dist::rInvGamma(nu_2, 0.5*(L_00*L_00), n, key));
     Lambda(0,0) = g;
     Lambda_inv(0,0) = 1./g;
   }
@@ -101,7 +112,7 @@ void internal_rCIW_eigen(double nu, const Eigen::MatrixXd &S, const LogicalVecto
       // Generate lambda_ii^2 ~ Inv-Gamma(nu/2, l_ii^2/2) <= 1
       const double L_ii = L(i,i);
       const double L_ii_2 = 0.5*(L_ii*L_ii);
-      const double lambda_ii = sqrt(moprobit::dist::rtruncInvGamma_lowertail(1, nu_2, L_ii_2));
+      const double lambda_ii = sqrt(moprobit::dist::rtruncInvGamma_lowertail(1, nu_2, L_ii_2, ++n, key));
       Lambda(i,i) = (lambda_ii < eps ? eps : lambda_ii);
       
       // Remaining portion of Lambda_i'Lambda_i = 1 - lambda_ii^2 available
@@ -142,7 +153,7 @@ void internal_rCIW_eigen(double nu, const Eigen::MatrixXd &S, const LogicalVecto
             const double lambda_ij = NumericVector(rtruncnorm(1, -sqrt_R2, sqrt_R2, mu_j, sd_j))[0];
             GetRNGstate();
 #else
-            const double lambda_ij = moprobit::dist::rtruncnorm(-sqrt_R2, sqrt_R2, mu_j, sd_j);
+            const double lambda_ij = moprobit::dist::rtruncnorm(-sqrt_R2, sqrt_R2, mu_j, sd_j, ++n, key);
 #endif
             Lambda(i,j) = lambda_ij;
             R2 -= lambda_ij*lambda_ij;
@@ -183,10 +194,10 @@ void internal_rCIW_eigen(double nu, const Eigen::MatrixXd &S, const LogicalVecto
           else if (r-mu0 > mu0+r)
             Lambda(i,0) = -r;
           else
-            Lambda(i,0) = (moprobit::dist::runif() < .5 ? r : -r);
+            Lambda(i,0) = (moprobit::dist::runif(++n, key) < .5 ? r : -r);
         }
         else
-          Lambda(i,0) = (moprobit::dist::runif() < p_pos / (p_pos + p_neg) ? r : -r);
+          Lambda(i,0) = (moprobit::dist::runif(++n, key) < p_pos / (p_pos + p_neg) ? r : -r);
       } else // R2 < eps2
         Lambda(i,0) = 0;
       
@@ -198,7 +209,7 @@ void internal_rCIW_eigen(double nu, const Eigen::MatrixXd &S, const LogicalVecto
       
       // lambda_ii ~ IGamma(nu/2, L[i,i]^2/2)
       const double L_ii = L(i, i);
-      const double Lambda_ii = sqrt(moprobit::dist::rInvGamma(nu_2, 0.5*(L_ii*L_ii)));
+      const double Lambda_ii = sqrt(moprobit::dist::rInvGamma(nu_2, 0.5*(L_ii*L_ii), ++n, key));
       Lambda(i,i) = Lambda_ii;
       
       // Lambda_i ~ N_{i-1}(L_i (L_ii)^-1 Lambda_ii, lambda_ii^2 Lambda_ii' (L_ii^-1)' L_ii^-1 Lambda_ii)
@@ -206,7 +217,7 @@ void internal_rCIW_eigen(double nu, const Eigen::MatrixXd &S, const LogicalVecto
         L.block(i,0, 1,i) *
         L_inv.topLeftCorner(i, i).triangularView<Lower>() *
         Lambda.topLeftCorner(i, i).triangularView<Lower>() +
-        as<Eigen::Map<Eigen::Matrix<double, 1, Eigen::Dynamic> > >(rnorm(i)) *
+        rnorm_rowvec(i, n, key) *
         L_inv.topLeftCorner(i, i).triangularView<Lower>() *
         Lambda.topLeftCorner(i, i).triangularView<Lower>() * Lambda_ii;
     }
@@ -228,6 +239,12 @@ List internal_rCIW(double nu, NumericMatrix S, LogicalVector fix, double eps)
   using Eigen::RowVectorXd;
   using Eigen::Lower;
   
+#ifdef MOPROBIT_DIST_USE_R
+  const Key key = 0;
+#else
+  const Key key = Key::from_R();
+#endif
+  
   // Dimension of the problem
   const int p = S.nrow();
   
@@ -239,7 +256,8 @@ List internal_rCIW(double nu, NumericMatrix S, LogicalVector fix, double eps)
                           Named("Lambda_inv") = NumericMatrix::diag(1, 1));
     else
     {
-      double g = sqrt(moprobit::dist::rInvGamma(0.5*nu, 0.5*S[0,0]));
+      moprobit::dist::Counter n;
+      double g = sqrt(moprobit::dist::rInvGamma(0.5*nu, 0.5*S[0,0], n, key));
       return List::create(Named("Lambda") = NumericMatrix::diag(1, g),
                           Named("Lambda_inv") = NumericMatrix::diag(1, 1./g));
     }
@@ -249,7 +267,7 @@ List internal_rCIW(double nu, NumericMatrix S, LogicalVector fix, double eps)
   MatrixXd Lambda(p, p);
   MatrixXd Lambda_inv(p, p);
   
-  internal_rCIW_eigen(nu, as<Eigen::Map<MatrixXd> >(S), fix, eps, Lambda, Lambda_inv);
+  internal_rCIW_eigen(nu, as<Eigen::Map<MatrixXd> >(S), fix, eps, Lambda, Lambda_inv, key);
   
   return List::create(Named("Lambda") = wrap(Lambda), Named("Lambda_inv") = wrap(Lambda_inv));
 }
