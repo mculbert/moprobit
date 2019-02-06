@@ -13,6 +13,6 @@ Description: This package estimates general multivariate ordinal probit models
     estimated alongside the binary/ordinal probit outcomes.
 License: GPL (>= 3)
 Imports: Rcpp (>= 1.0.0), dplyr, tidyr, MASS, Matrix, coda
-LinkingTo: Rcpp, RcppEigen
+LinkingTo: Rcpp, RcppEigen, BH
 Roxygen: list(markdown = TRUE)
 RoxygenNote: 6.0.1

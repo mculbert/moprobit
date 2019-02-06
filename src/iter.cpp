@@ -23,12 +23,13 @@
 #include <RcppEigen.h>
 using namespace Rcpp;
 
-#include "truncnorm.cpp"
+#include "dist.h"
 #include "CIW.h"
 
 // [[Rcpp::export]]
 List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bool fixCrossBlockCov, double eps)
 {
+  using moprobit::dist::pnorm;
   using Eigen::MatrixXd;
   using Eigen::VectorXd;
   using Eigen::Lower;
@@ -179,9 +180,9 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
             proposal[0] = 0;
             // Intermediate thresholds, k = 1:(K-3)
             for (int k=1; k < K[j]-2; k++)
-              proposal[k] = r_truncnorm(proposal[k-1], old[k+1], old[k], sd_tau);
+              proposal[k] = moprobit::dist::rtruncnorm(proposal[k-1], old[k+1], old[k], sd_tau);
             // Last threshold, k = K-2
-            proposal[K[j]-2] = r_lefttruncnorm(proposal[K[j]-3], old[K[j]-2], sd_tau);
+            proposal[K[j]-2] = moprobit::dist::rtruncnorm_uppertail(proposal[K[j]-3], old[K[j]-2], sd_tau);
             
             // Calculate the acceptance probability
             double R = 0;
@@ -192,10 +193,10 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
             for (int k = 1; k < K[j]-1; k++)  // 1:(K-2)
             {
               // Note that in 0-based indexing, old[K[j]-1] = proposal[K[j]-1] = Inf
-              const double num = (k < K[j]-2 ? R::pnorm(old[k+1] - old[k], 0, sd_tau, true, false) : 1) -
-                R::pnorm(proposal[k-1] - old[k], 0, sd_tau, true, false);
-              const double denom = (k < K[j]-2 ? R::pnorm(proposal[k+1] - proposal[k], 0, sd_tau, true, false) : 1) -
-                R::pnorm(old[k-1] - proposal[k], 0, sd_tau, true, false);
+              const double num = (k < K[j]-2 ? pnorm(old[k+1] - old[k], 0, sd_tau) : 1) -
+                pnorm(proposal[k-1] - old[k], 0, sd_tau);
+              const double denom = (k < K[j]-2 ? pnorm(proposal[k+1] - proposal[k], 0, sd_tau) : 1) -
+                pnorm(old[k-1] - proposal[k], 0, sd_tau);
               const double r = num / denom;
               if (std::isfinite(r) && r > 0) R += log(r);
             }
@@ -203,10 +204,10 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
             {
               const int I = obs[i];
               const int y = Yj[i];
-              const double num =   (y < K[j]-1 ? R::pnorm(proposal[y], mu_j[I], sd_j, true, false) : 1) -
-                (y > 0      ? R::pnorm(proposal[y-1], mu_j[I], sd_j, true, false) : 0);
-              const double denom = (y < K[j]-1 ? R::pnorm(old[y], mu_j[I], sd_j, true, false) : 1) -
-                (y > 0      ? R::pnorm(old[y-1], mu_j[I], sd_j, true, false) : 0);
+              const double num =   (y < K[j]-1 ? pnorm(proposal[y], mu_j[I], sd_j) : 1) -
+                (y > 0      ? pnorm(proposal[y-1], mu_j[I], sd_j) : 0);
+              const double denom = (y < K[j]-1 ? pnorm(old[y], mu_j[I], sd_j) : 1) -
+                (y > 0      ? pnorm(old[y-1], mu_j[I], sd_j) : 0);
               const double r = num / denom;
               if (std::isfinite(r) && r > 0) R += log(r);
             }
@@ -216,10 +217,10 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
             //   Automatic acceptance if R >= 1
             num_attempted_tau += 1;
 #ifdef PEDANTIC
-            double u = R::runif(0, 1);
+            double u = moprobit::dist::runif();
             if (R < 1 && u > R)
 #else
-              if (R < 1 && R::runif(0, 1) > R)
+              if (R < 1 && moprobit::dist::runif() > R)
 #endif
                 goto step3;  // Reject
               num_accepted_tau += 1;
@@ -237,13 +238,13 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
             // upper <- c(tau[[j]], Inf)[Yj]
             if (y == 0)
               // lower = -Inf, upper = tau[Yj]
-              Z(I,j) = r_righttruncnorm(tau_j[y], mu_j[I], sd_j);
+              Z(I,j) = moprobit::dist::rtruncnorm_lowertail(tau_j[y], mu_j[I], sd_j);
             else if (y == K[j]-1)
               // lower = tau[Yj-1], upper = Inf
-              Z(I,j) = r_lefttruncnorm(tau_j[y-1], mu_j[I], sd_j);
+              Z(I,j) = moprobit::dist::rtruncnorm_uppertail(tau_j[y-1], mu_j[I], sd_j);
             else
               // lower = tau[Yj-1], upper = tau[Yj]
-              Z(I,j) = r_truncnorm(tau_j[y-1], tau_j[y], mu_j[I], sd_j);
+              Z(I,j) = moprobit::dist::rtruncnorm(tau_j[y-1], tau_j[y], mu_j[I], sd_j);
             
             E(I,j) = Z(I,j) - mu(I,j);
           }
@@ -288,7 +289,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                 for (int i = 0; i < Nmis; i++)
                 {
                   const int I = mis[i];
-                  Yj[I] = Z(I,j) = R::rnorm(adj_mu_j[I], adj_sd_j[I]);
+                  Yj[I] = Z(I,j) = moprobit::dist::rnorm(adj_mu_j[I], adj_sd_j[I]);
                   mu(I,j) = (X.row(I) * beta.col(j))(0,0);
                   E(I,j) = Z(I,j) - mu(I,j);
                 }
@@ -300,7 +301,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                 for (int i = 0; i < Nmis; i++)
                 {
                   const int I = mis[i];
-                  Z(I,j) = R::rnorm(mu_j[I], sd_j);
+                  Z(I,j) = moprobit::dist::rnorm(mu_j[I], sd_j);
                   Yj[I] = (Z(I,j) > 0);
                   mu(I,j) = (X.row(I) * beta.col(j))(0,0);
                   E(I,j) = Z(I,j) - mu(I,j);
@@ -314,7 +315,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                 for (int i = 0; i < Nmis; i++)
                 {
                   const int I = mis[i];
-                  Z(I,j) = R::rnorm(mu_j[I], sd_j);
+                  Z(I,j) = moprobit::dist::rnorm(mu_j[I], sd_j);
                   // factor(sapply(Z[mis, j], function(z) levels(env$Y[,j])[sum(z > tau[[j]])+1]), levels=levels(env$Y[,j]))
                   Yj[I] = sum(Z(I,j) > tau_j) + 1;
                   mu(I,j) = (X.row(I) * beta.col(j))(0,0);
@@ -331,7 +332,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
               {
                 const int I = mis[i];
                 Zstar.row(i) = Z.row(I);
-                Zstar(i,j) = R::rnorm(adj_mu_j[I], adj_sd_j[I]);
+                Zstar(i,j) = moprobit::dist::rnorm(adj_mu_j[I], adj_sd_j[I]);
               }
               
               // Y.star
@@ -445,10 +446,10 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                   
                   // Accept
 #ifdef PEDANTIC
-                  double u = R::runif(0,1);
+                  double u = moprobit::dist::runif();
                   if (R > 0 || log(u) < R)
 #else
-                  if (R > 0 || log(R::runif(0,1)) < R)
+                  if (R > 0 || log(moprobit::dist::runif()) < R)
 #endif
                   {
                     Z(I,j) = Zstar(i,j);

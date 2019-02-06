@@ -23,7 +23,7 @@
 #include <RcppEigen.h>
 using namespace Rcpp;
 
-#include "truncnorm.cpp"
+#include "dist.h"
 
 void internal_rCIW_eigen(double nu, const Eigen::MatrixXd &S, const LogicalVector fix, double eps,
                         Eigen::MatrixXd &Lambda, Eigen::MatrixXd &Lambda_inv)
@@ -34,10 +34,9 @@ void internal_rCIW_eigen(double nu, const Eigen::MatrixXd &S, const LogicalVecto
   
   // Dimension of the problem
   const int p = S.rows();
-  const double nu_2 = nu/2;
+  const double nu_2 = 0.5*nu;
   
   // Wishart_1(nu, S) = Gamma(nu/2, S/2)
-  //   Note that R::rgamma uses the scale = 1/rate parameterization
   if (p == 1)
   {
     if (fix[0])
@@ -47,9 +46,9 @@ void internal_rCIW_eigen(double nu, const Eigen::MatrixXd &S, const LogicalVecto
     }
     else
     {
-      const double g = sqrt(R::rgamma(nu_2, 2./S(0,0)));
-      Lambda(0,0) = 1./g;
-      Lambda_inv(0,0) = g;
+      const double g = sqrt(moprobit::dist::rInvGamma(nu_2, 0.5*S(0,0)));
+      Lambda(0,0) = g;
+      Lambda_inv(0,0) = 1./g;
       return;
     }
   }
@@ -88,9 +87,9 @@ void internal_rCIW_eigen(double nu, const Eigen::MatrixXd &S, const LogicalVecto
   else
   {
     const double L_00 = L(0,0);
-    const double g = sqrt(R::rgamma(nu_2, 2./(L_00*L_00)));
-    Lambda_inv(0,0) = g;
-    Lambda(0,0) = 1./g;
+    const double g = sqrt(moprobit::dist::rInvGamma(nu_2, 0.5*(L_00*L_00)));
+    Lambda(0,0) = g;
+    Lambda_inv(0,0) = 1./g;
   }
   
   // Remaining rows, 1:(p-1)
@@ -101,10 +100,8 @@ void internal_rCIW_eigen(double nu, const Eigen::MatrixXd &S, const LogicalVecto
     {
       // Generate lambda_ii^2 ~ Inv-Gamma(nu/2, l_ii^2/2) <= 1
       const double L_ii = L(i,i);
-      const double L_ii_2 = 2./(L_ii*L_ii);
-      const double u = R::runif(0, 1);
-      const double G = R::qgamma(u + (1-u)*R::pgamma(1, nu_2, L_ii_2, true, false), nu_2, L_ii_2, true, false);
-      const double lambda_ii = 1./sqrt(G);
+      const double L_ii_2 = 0.5*(L_ii*L_ii);
+      const double lambda_ii = sqrt(moprobit::dist::rtruncInvGamma_lowertail(1, nu_2, L_ii_2));
       Lambda(i,i) = (lambda_ii < eps ? eps : lambda_ii);
       
       // Remaining portion of Lambda_i'Lambda_i = 1 - lambda_ii^2 available
@@ -145,7 +142,7 @@ void internal_rCIW_eigen(double nu, const Eigen::MatrixXd &S, const LogicalVecto
             const double lambda_ij = NumericVector(rtruncnorm(1, -sqrt_R2, sqrt_R2, mu_j, sd_j))[0];
             GetRNGstate();
 #else
-            const double lambda_ij = r_truncnorm(-sqrt_R2, sqrt_R2, mu_j, sd_j);
+            const double lambda_ij = moprobit::dist::rtruncnorm(-sqrt_R2, sqrt_R2, mu_j, sd_j);
 #endif
             Lambda(i,j) = lambda_ij;
             R2 -= lambda_ij*lambda_ij;
@@ -186,10 +183,10 @@ void internal_rCIW_eigen(double nu, const Eigen::MatrixXd &S, const LogicalVecto
           else if (r-mu0 > mu0+r)
             Lambda(i,0) = -r;
           else
-            Lambda(i,0) = (R::runif(0, 1) < .5 ? r : -r);
+            Lambda(i,0) = (moprobit::dist::runif() < .5 ? r : -r);
         }
         else
-          Lambda(i,0) = (R::runif(0, 1) < p_pos / (p_pos + p_neg) ? r : -r);
+          Lambda(i,0) = (moprobit::dist::runif() < p_pos / (p_pos + p_neg) ? r : -r);
       } else // R2 < eps2
         Lambda(i,0) = 0;
       
@@ -201,7 +198,7 @@ void internal_rCIW_eigen(double nu, const Eigen::MatrixXd &S, const LogicalVecto
       
       // lambda_ii ~ IGamma(nu/2, L[i,i]^2/2)
       const double L_ii = L(i, i);
-      const double Lambda_ii = 1./sqrt(R::rgamma(nu_2, 2./(L_ii*L_ii)));
+      const double Lambda_ii = sqrt(moprobit::dist::rInvGamma(nu_2, 0.5*(L_ii*L_ii)));
       Lambda(i,i) = Lambda_ii;
       
       // Lambda_i ~ N_{i-1}(L_i (L_ii)^-1 Lambda_ii, lambda_ii^2 Lambda_ii' (L_ii^-1)' L_ii^-1 Lambda_ii)
@@ -235,7 +232,6 @@ List internal_rCIW(double nu, NumericMatrix S, LogicalVector fix, double eps)
   const int p = S.nrow();
   
   // Wishart_1(nu, S) = Gamma(nu/2, S/2)
-  //   Note that R::rgamma uses the scale = 1/rate parameterization
   if (p == 1)
   {
     if (fix[0])
@@ -243,9 +239,9 @@ List internal_rCIW(double nu, NumericMatrix S, LogicalVector fix, double eps)
                           Named("Lambda_inv") = NumericMatrix::diag(1, 1));
     else
     {
-      double g = sqrt(R::rgamma(nu/2, 2./S[0,0]));
-      return List::create(Named("Lambda") = NumericMatrix::diag(1, 1./g),
-                          Named("Lambda_inv") = NumericMatrix::diag(1, g));
+      double g = sqrt(moprobit::dist::rInvGamma(0.5*nu, 0.5*S[0,0]));
+      return List::create(Named("Lambda") = NumericMatrix::diag(1, g),
+                          Named("Lambda_inv") = NumericMatrix::diag(1, 1./g));
     }
   }
   
