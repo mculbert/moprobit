@@ -1,8 +1,8 @@
 Package: moprobit
 Type: Package
 Title: Multivariate Ordinal Probit Models via Markov Chain Monte Carlo
-Version: 0.1
-Date: 2019-01-18
+Version: 0.1.1
+Date: 2019-02-07
 Author: Michael J. Culbertson
 Maintainer: Michael J. Culbertson <mculbertson@edanalytics.org>
 Description: This package estimates general multivariate ordinal probit models

@@ -112,11 +112,17 @@ moprobit_init <- function(formulas, dataset, sd_tau, meas_err = NULL, contrasts 
     stop("Missing data in base predictors")
   p.names <- colnames(model.matrix(env$f, dataset, env$contrasts, na.action = na.pass))
   p <- length(p.names)
+    # The order of variables in interaction terms can change, depending on what else is in the formula
+    # So, we break up the names in interaction terms, sort them, and then recombine
+    #   before comparing what's in p.names and in the model.matrix for this block
+  p.names.sorted <- sapply(strsplit(p.names, ':'), function(x) paste(sort(x), collapse=':'))
   env$p.block <- matrix(sapply(predictors, function(p) {
     pfx <- formula(paste0('~', p))
     pfm <- model.frame(pfx, dataset, na.action = na.pass)
     pc <- if (is.null(env$contrasts)) NULL else env$contrasts[names(env$contrasts) %in% colnames(pfm)]
-    p.names %in% colnames(model.matrix(pfx, pfm, pc, na.action = na.pass))
+    block.p.names <- colnames(model.matrix(pfx, pfm, pc, na.action = na.pass))
+    block.p.names.sorted <- sapply(strsplit(block.p.names, ':'), function(x) paste(sort(x), collapse=':'))
+    p.names.sorted %in% block.p.names.sorted
   }), p, env$G)
   colnames(env$p.block) <- names(predictors)
   row.names(env$p.block) <- p.names
