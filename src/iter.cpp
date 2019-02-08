@@ -94,62 +94,15 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
   int num_accepted_tau = 0, num_attempted_tau = 0;
   int num_accepted_Z = 0, num_attempted_Z = 0;
   
-  // Working space: Matrix to select columns of X for block g (in step 4)
+  // Working space: Matrix to select columns of X for block g (in step 2)
   Eigen::SparseMatrix<double> C(p,p);
   
   
   // One Gibbs iteration
   for (int iter = 0; iter < iters; iter++)
   {
-    // Step 1: Draw Sigma | E ~ CIW(E'E + a*I_q, n+a)
-    if (!fixSigma)
-    {
-      if (!fixCrossBlockCov)
-      {
-        // E'E + a*diag(q)
-        const MatrixXd resid2( MatrixXd(MatrixXd(q, q).setZero().selfadjointView<Lower>().rankUpdate(E.adjoint())) +
-                               a * MatrixXd::Identity(q,q) );
-        // Lambda <- rCIW(df, resid2, fixed)
-        // FIXME: Figure out templating for internal_CIW_eigen so we don't have to use these temporary objects
-        MatrixXd L_Sigma_tmp(q,q);
-        MatrixXd D_inv_Sigma_tmp(q,q);
-        internal_rCIW_eigen(df, resid2, fixed, eps, L_Sigma_tmp, D_inv_Sigma_tmp);
-        L_Sigma = L_Sigma_tmp;
-        D_inv_Sigma = D_inv_Sigma_tmp;
-      }
-      else // block-wise
-      {
-        int q_lt_g = 0;
-        for (int g = 0; g < G; g++)
-        {
-          const int q_g = sum(q_block.column(g));  // number of outcomes in this block
-          // crossprod(E[, q.g, drop=F]) + a * diag(sum(q.g))
-          const MatrixXd resid2( MatrixXd(MatrixXd(q_g,q_g).setZero().selfadjointView<Lower>().rankUpdate(E.middleCols(q_lt_g,q_g).adjoint())) +
-                                 a * MatrixXd::Identity(q_g,q_g) );
-          //auto L_Sigma_g = L_Sigma.block(q_lt_g,q_lt_g, q_g,q_g);
-          //auto D_inv_Sigma_g = D_inv_Sigma.block(q_lt_g,q_lt_g, q_g,q_g);
-          
-          // Lambda <- rCIW(df, resid2, fixed[q.g])
-          // FIXME: Figure out templating for internal_CIW_eigen so we don't have to use these temporary objects
-          MatrixXd L_Sigma_tmp(q_g,q_g);
-          MatrixXd D_inv_Sigma_tmp(q_g,q_g);
-          internal_rCIW_eigen(df, resid2, fixed[q_block.column(g)], eps, L_Sigma_tmp, D_inv_Sigma_tmp );
-          L_Sigma.block(q_lt_g,q_lt_g, q_g,q_g) = L_Sigma_tmp;
-          D_inv_Sigma.block(q_lt_g,q_lt_g, q_g,q_g) = D_inv_Sigma_tmp;
-          
-          // cumulative number of outcome variables in prior blocks
-          q_lt_g += q_g;
-        }
-      }
-      
-      // Compute the corresponding covariance matrix
-      Sigma = L_Sigma * L_Sigma.transpose();
-      Omega = D_inv_Sigma.transpose() * D_inv_Sigma;
-    }
-    
-    
-    // Step 2: Draw Z^(d)[Y.obs] | Y, Z^(c), beta, Omega ~ Truncated Multivariate Normal
-    // Step 3: Draw Z[Y.mis]|X,B,Sigma for each grade level
+    // Step 1a: Draw Z^(d)[Y.obs] | Y, Z^(c), beta, Omega ~ Truncated Multivariate Normal
+    // Step 1b: Draw Z[Y.mis]|X,B,Sigma for each grade level
     for (int sub_iter = TMN_iters; sub_iter > 0; sub_iter--)
     {
       for (int j = 0; j < q; j++)
@@ -221,13 +174,13 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
 #else
               if (R < 1 && R::runif(0, 1) > R)
 #endif
-                goto step3;  // Reject
+                goto step1b;  // Reject
               num_accepted_tau += 1;
               
               tau[j] = proposal;
           } // update thresholds
           
-          // Update latent variable, Y.obs part (step 2)
+          // Update latent variable, Y.obs part (step 1a)
           const NumericVector tau_j = tau[j];
           for (int i = 0; i < Nobs; i++)
           {
@@ -250,8 +203,8 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
           
         } // if discrete variable
         
-        step3:
-          // Y.mis part (step 3), only on last sub-iteration
+        step1b:
+          // Y.mis part (step 1b), only on last sub-iteration
           if (sub_iter == 1 && (as<IntegerVector>(Ymis[j]).size() > 0 || !(as<RObject>(meas_err[j]).isNULL())) )
           {
             const bool no_meas_err = as<RObject>(meas_err[j]).isNULL();
@@ -480,12 +433,12 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                 } // each individual with missing j
             } // sample outcome that is also a predictor
             
-          } // step 3 (missing outcomes)
+          } // step 1b (missing outcomes)
       } // each outcome variable
     } // each sub_iter
     
     
-    // Step 4: Draw beta | Z, Sigma ~ MN_{p,q}( (X'X)^{-1}X'Z, (X'X)^{-1}, Sigma) for each block
+    // Step 2: Draw beta | Z, Sigma ~ MN_{p,q}( (X'X)^{-1}X'Z, (X'X)^{-1}, Sigma) for each block
     //   q.block is in order by block, but p.block could be in any arbitrary order
     int q_lt_g = 0;
     for (int g = 0; g < G; g++)
@@ -545,6 +498,53 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
           q_lt_g += q_g;
     } // each block in beta
     
+    
+    // Step 3: Draw Sigma | E ~ CIW(E'E + a*I_q, n+a)
+    if (!fixSigma)
+    {
+      if (!fixCrossBlockCov)
+      {
+        // E'E + a*diag(q)
+        const MatrixXd resid2( MatrixXd(MatrixXd(q, q).setZero().selfadjointView<Lower>().rankUpdate(E.adjoint())) +
+                               a * MatrixXd::Identity(q,q) );
+        // Lambda <- rCIW(df, resid2, fixed)
+        // FIXME: Figure out templating for internal_CIW_eigen so we don't have to use these temporary objects
+        MatrixXd L_Sigma_tmp(q,q);
+        MatrixXd D_inv_Sigma_tmp(q,q);
+        internal_rCIW_eigen(df, resid2, fixed, eps, L_Sigma_tmp, D_inv_Sigma_tmp);
+        L_Sigma = L_Sigma_tmp;
+        D_inv_Sigma = D_inv_Sigma_tmp;
+      }
+      else // block-wise
+      {
+        int q_lt_g = 0;
+        for (int g = 0; g < G; g++)
+        {
+          const int q_g = sum(q_block.column(g));  // number of outcomes in this block
+          // crossprod(E[, q.g, drop=F]) + a * diag(sum(q.g))
+          const MatrixXd resid2( MatrixXd(MatrixXd(q_g,q_g).setZero().selfadjointView<Lower>().rankUpdate(E.middleCols(q_lt_g,q_g).adjoint())) +
+                                 a * MatrixXd::Identity(q_g,q_g) );
+          //auto L_Sigma_g = L_Sigma.block(q_lt_g,q_lt_g, q_g,q_g);
+          //auto D_inv_Sigma_g = D_inv_Sigma.block(q_lt_g,q_lt_g, q_g,q_g);
+          
+          // Lambda <- rCIW(df, resid2, fixed[q.g])
+          // FIXME: Figure out templating for internal_CIW_eigen so we don't have to use these temporary objects
+          MatrixXd L_Sigma_tmp(q_g,q_g);
+          MatrixXd D_inv_Sigma_tmp(q_g,q_g);
+          internal_rCIW_eigen(df, resid2, fixed[q_block.column(g)], eps, L_Sigma_tmp, D_inv_Sigma_tmp );
+          L_Sigma.block(q_lt_g,q_lt_g, q_g,q_g) = L_Sigma_tmp;
+          D_inv_Sigma.block(q_lt_g,q_lt_g, q_g,q_g) = D_inv_Sigma_tmp;
+          
+          // cumulative number of outcome variables in prior blocks
+          q_lt_g += q_g;
+        }
+      }
+      
+      // Compute the corresponding covariance matrix
+      Sigma = L_Sigma * L_Sigma.transpose();
+      Omega = D_inv_Sigma.transpose() * D_inv_Sigma;
+    }
+
   } // Gibbs iteration
   
   
