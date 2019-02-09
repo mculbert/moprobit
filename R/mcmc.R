@@ -49,6 +49,7 @@ moprobit_init <- function(formulas, dataset, sd_tau, meas_err = NULL, contrasts 
   state <- list(env=env)
   
   if (!is.list(formulas)) formulas <- list(formulas)
+  if (is.null(names(formulas))) names(formulas) <- paste0('B', seq_along(formulas))
   env$G <- length(formulas)
   env$formulas <- formulas
   env$contrasts <- contrasts
