@@ -26,6 +26,14 @@ using namespace Rcpp;
 #include "dist.h"
 #include "CIW.h"
 
+#ifdef MOPROBIT_DIST_USE_R
+#define JUMP {}
+#define COPY_I_TO_CNT {}
+#else
+#define JUMP cnt.jump()
+#define COPY_I_TO_CNT cnt.i1 = i
+#endif
+
 
 inline Eigen::MatrixXd rnorm_matrix(int r, int c, moprobit::dist::Counter &cnt, const moprobit::dist::Key &key)
 {
@@ -146,6 +154,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
           {
             const NumericVector old = tau[j];
             NumericVector proposal(K[j]-1);    // 0:(K-2)
+            JUMP;
             
             // First threshold always 0
             proposal[0] = 0;
@@ -201,21 +210,23 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
           
           // Update latent variable, Y.obs part (step 1a)
           const NumericVector tau_j = tau[j];
+          JUMP;
           for (int i = 0; i < Nobs; i++)
           {
+            COPY_I_TO_CNT;
             const int I = obs[i];
             const int y = Yj[i];
             // lower <- c(-Inf, tau[[j]])[Yj]
             // upper <- c(tau[[j]], Inf)[Yj]
             if (y == 0)
               // lower = -Inf, upper = tau[Yj]
-              Z(I,j) = moprobit::dist::rtruncnorm_lowertail(tau_j[y], mu_j[I], sd_j, ++cnt, key);
+              Z(I,j) = moprobit::dist::rtruncnorm_lowertail(tau_j[y], mu_j[I], sd_j, cnt, key);
             else if (y == K[j]-1)
               // lower = tau[Yj-1], upper = Inf
-              Z(I,j) = moprobit::dist::rtruncnorm_uppertail(tau_j[y-1], mu_j[I], sd_j, ++cnt, key);
+              Z(I,j) = moprobit::dist::rtruncnorm_uppertail(tau_j[y-1], mu_j[I], sd_j, cnt, key);
             else
               // lower = tau[Yj-1], upper = tau[Yj]
-              Z(I,j) = moprobit::dist::rtruncnorm(tau_j[y-1], tau_j[y], mu_j[I], sd_j, ++cnt, key);
+              Z(I,j) = moprobit::dist::rtruncnorm(tau_j[y-1], tau_j[y], mu_j[I], sd_j, cnt, key);
             
             E(I,j) = Z(I,j) - mu(I,j);
           }
@@ -257,10 +268,12 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
               {
                 // Continuous case
                 NumericVector Yj = Y[j];
+                JUMP;
                 for (int i = 0; i < Nmis; i++)
                 {
+                  COPY_I_TO_CNT;
                   const int I = mis[i];
-                  Yj[I] = Z(I,j) = moprobit::dist::rnorm(adj_mu_j[I], adj_sd_j[I], ++cnt, key);
+                  Yj[I] = Z(I,j) = moprobit::dist::rnorm(adj_mu_j[I], adj_sd_j[I], cnt, key);
                   mu(I,j) = (X.row(I) * beta.col(j))(0,0);
                   E(I,j) = Z(I,j) - mu(I,j);
                 }
@@ -269,10 +282,12 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
               {
                 // Logical case
                 LogicalVector Yj = Y[j];
+                JUMP;
                 for (int i = 0; i < Nmis; i++)
                 {
+                  COPY_I_TO_CNT;
                   const int I = mis[i];
-                  Z(I,j) = moprobit::dist::rnorm(mu_j[I], sd_j, ++cnt, key);
+                  Z(I,j) = moprobit::dist::rnorm(mu_j[I], sd_j, cnt, key);
                   Yj[I] = (Z(I,j) > 0);
                   mu(I,j) = (X.row(I) * beta.col(j))(0,0);
                   E(I,j) = Z(I,j) - mu(I,j);
@@ -283,10 +298,12 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                 // Factor case
                 IntegerVector Yj = Y[j];
                 const NumericVector tau_j = tau[j];
+                JUMP;
                 for (int i = 0; i < Nmis; i++)
                 {
+                  COPY_I_TO_CNT;
                   const int I = mis[i];
-                  Z(I,j) = moprobit::dist::rnorm(mu_j[I], sd_j, ++cnt, key);
+                  Z(I,j) = moprobit::dist::rnorm(mu_j[I], sd_j, cnt, key);
                   // factor(sapply(Z[mis, j], function(z) levels(env$Y[,j])[sum(z > tau[[j]])+1]), levels=levels(env$Y[,j]))
                   Yj[I] = sum(Z(I,j) > tau_j) + 1;
                   mu(I,j) = (X.row(I) * beta.col(j))(0,0);
@@ -299,11 +316,13 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
               
               // Z.star <- Z[mis,]; Z.star[,j] <- rnorm(N.mis[j], mean = mu_j[mis], sd = sd_j)
               MatrixXd Zstar(Nmis, q);
+              JUMP;
               for (int i = 0; i < Nmis; i++)
               {
+                COPY_I_TO_CNT;
                 const int I = mis[i];
                 Zstar.row(i) = Z.row(I);
-                Zstar(i,j) = moprobit::dist::rnorm(adj_mu_j[I], adj_sd_j[I], ++cnt, key);
+                Zstar(i,j) = moprobit::dist::rnorm(adj_mu_j[I], adj_sd_j[I], cnt, key);
               }
               
               // Y.star
@@ -396,8 +415,10 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                 
                 // For each individual, calculate acceptance and update
                 num_attempted_Z += Nmis;
+                JUMP;
                 for (int i = 0; i < Nmis; i++)
                 {
+                  COPY_I_TO_CNT;
                   const int I = mis[i];
                   const NumericVector Yj = as<NumericVector>(as<DataFrame>(env["Y"])[j]);
                   
@@ -417,10 +438,10 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                   
                   // Accept
 #ifdef PEDANTIC
-                  double u = moprobit::dist::runif(++cnt, key);
+                  double u = moprobit::dist::runif(cnt, key);
                   if (R > 0 || log(u) < R)
 #else
-                  if (R > 0 || log(moprobit::dist::runif(++cnt, key)) < R)
+                  if (R > 0 || log(moprobit::dist::runif(cnt, key)) < R)
 #endif
                   {
                     Z(I,j) = Zstar(i,j);
@@ -459,6 +480,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
     
     // Step 2: Draw beta | Z, Sigma ~ MN_{p,q}( (X'X)^{-1}X'Z, (X'X)^{-1}, Sigma) for each block
     //   q.block is in order by block, but p.block could be in any arbitrary order
+    JUMP;
     int q_lt_g = 0;
     for (int g = 0; g < G; g++)
     {
@@ -521,6 +543,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
     // Step 3: Draw Sigma | E ~ CIW(E'E + a*I_q, n+a)
     if (!fixSigma)
     {
+      JUMP;
       if (!fixCrossBlockCov)
       {
         // E'E + a*diag(q)
