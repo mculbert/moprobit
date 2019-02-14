@@ -144,11 +144,9 @@ moprobit_init <- function(formulas, dataset, sd_tau, meas_err = NULL, contrasts 
       warning("Measurement error variances supplied for non-coninuous outcomes will be ignored: ",
               names(meas_err)[which(names(meas_err) %in% names(env$Y)[!env$Y.continuous])])
     env$meas_err <- lapply(names(env$Y), function(j)
-      if (j %in% names(meas_err)) {
-        x <- meas_err[[j]]
-        if (length(x) > 1) ifelse(is.na(x) | x == 0, 0, 1/x) else
-                             rep(if (x == 0) 0 else 1/x, n)
-      } else NULL)
+      if (j %in% names(meas_err))
+        ifelse(is.na(meas_err[[j]]) | meas_err[[j]] == 0 | is.na(env$Y[[j]]), 0, 1/meas_err[[j]])
+      else NULL)
     names(env$meas_err) <- q.names
     env$Y.mev <- lapply(names(env$Y), function(j)
       if (!is.null(env$meas_err[[j]]))
