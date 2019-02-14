@@ -66,8 +66,8 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
   // Extract the MCMC setup
   const Environment env(as<Environment>(prior["env"]));      // Constants
   const int G = env["G"];                           // Number of grade-level blocks
-  const IntegerVector K = env["K"];                 // Number of levels for each discrete variable (0 = continuous)
-  const LogicalVector Ybool = env["Y.logical"];     // Flag that variable is logical
+  const int *K = as<IntegerVector>(env["K"]).begin();  // Number of levels for each discrete variable (0 = continuous)
+  const int *Ybool = as<LogicalVector>(env["Y.logical"]).begin();  // Flag that variable is logical
   
   const LogicalMatrix q_block = env["q.block"];     // Outcomes in each block (q x G)
   const LogicalMatrix p_block = env["p.block"];     // Covariates in each block (p x G)
@@ -134,6 +134,10 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
     {
       for (int j = 0; j < q; j++)
       {
+        double *Yj_dbl = (K[j] == 0 ? as<NumericVector>(Y[j]).begin() : NULL);
+        int *Yj_int = (K[j] == 0 ? NULL :
+                         (Ybool[j] ? as<LogicalVector>(Y[j]).begin() : as<IntegerVector>(Y[j]).begin()));
+        
         // Conditional mean/sd for Z_j|Z_-j
         // mu_j <- mu[,j] - E[,-j, drop=F] %*% (Omega[-j,j, drop=F] / Omega[j,j])
         // sd_j <- 1/sqrt(Omega[j,j])
@@ -144,16 +148,16 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
         // Discrete variable
         if (K[j] > 0)
         {
-          const IntegerVector obs = as<IntegerVector>(Yobs[j])-1;                       // 0-based indexes
-          const IntegerVector Yj =                                                      // Coded 0:(K-1)
-            as<IntegerVector>(as<IntegerVector>(Y[j])[obs]) - (int)(Ybool[j] ? 0 : 1);
-          const int Nobs = obs.size();
+          const IntegerVector obsVec = as<IntegerVector>(Yobs[j])-1;                    // 0-based indexes
+          const int *obs = obsVec.begin();
+          const int Nobs = obsVec.size();
           
           // For more than two categories, propose new thresholds
           if (K[j] > 2)
           {
-            const NumericVector old = tau[j];
-            NumericVector proposal(K[j]-1);    // 0:(K-2)
+            const double *old = as<NumericVector>(tau[j]).begin();
+            NumericVector proposalVec(K[j]-1);    // 0:(K-2)
+            double *proposal = proposalVec.begin();
             JUMP;
             
             // First threshold always 0
@@ -165,7 +169,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
             proposal[K[j]-2] = moprobit::dist::rtruncnorm_uppertail(proposal[K[j]-3], old[K[j]-2], sd_tau, ++cnt, key);
             
             // Calculate the acceptance probability
-            double R = 0;
+            double R_thresh = 0, R_obs = 0;
             // prod((pnorm(old[3:K[j]] - old[2:(K[j]-1)], sd = sd_tau) -
             //       pnorm(proposal[1:(K[j]-2)] - old[2:(K[j]-1)], sd = sd_tau)) /
             //      (pnorm(proposal[3:K[j]] - proposal[2:(K[j]-1)], sd = sd_tau) -
@@ -178,20 +182,20 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
               const double denom = (k < K[j]-2 ? pnorm(proposal[k+1] - proposal[k], 0, sd_tau) : 1) -
                 pnorm(old[k-1] - proposal[k], 0, sd_tau);
               const double r = num / denom;
-              if (std::isfinite(r) && r > 0) R += log(r);
+              if (std::isfinite(r) && r > 0) R_thresh += log(r);
             }
             for (int i = 0; i < Nobs; i++)
             {
               const int I = obs[i];
-              const int y = Yj[i];
+              const int y = Yj_int[I] - 1;
               const double num =   (y < K[j]-1 ? pnorm(proposal[y], mu_j[I], sd_j) : 1) -
                 (y > 0      ? pnorm(proposal[y-1], mu_j[I], sd_j) : 0);
               const double denom = (y < K[j]-1 ? pnorm(old[y], mu_j[I], sd_j) : 1) -
                 (y > 0      ? pnorm(old[y-1], mu_j[I], sd_j) : 0);
               const double r = num / denom;
-              if (std::isfinite(r) && r > 0) R += log(r);
+              if (std::isfinite(r) && r > 0) R_obs += log(r);
             }
-            R = exp(R);
+            double R = exp(R_thresh + R_obs);
             
             // Determine acceptance
             //   Automatic acceptance if R >= 1
@@ -205,17 +209,17 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                 goto step1b;  // Reject
               num_accepted_tau += 1;
               
-              tau[j] = proposal;
+              tau[j] = proposalVec;
           } // update thresholds
           
           // Update latent variable, Y.obs part (step 1a)
-          const NumericVector tau_j = tau[j];
+          const double *tau_j = as<NumericVector>(tau[j]).begin();
           JUMP;
           for (int i = 0; i < Nobs; i++)
           {
             COPY_I_TO_CNT;
             const int I = obs[i];
-            const int y = Yj[i];
+            const int y = (Ybool[j] ? Yj_int[I] : Yj_int[I]-1);
             // lower <- c(-Inf, tau[[j]])[Yj]
             // upper <- c(tau[[j]], Inf)[Yj]
             if (y == 0)
@@ -238,11 +242,17 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
           if (sub_iter == 1 && (as<IntegerVector>(Ymis[j]).size() > 0 || !(as<RObject>(meas_err[j]).isNULL())) )
           {
             const bool no_meas_err = as<RObject>(meas_err[j]).isNULL();
-            const NumericVector mev = (no_meas_err ? NumericVector() : as<NumericVector>(meas_err[j]));
-            const IntegerVector mis = (no_meas_err ?
-                                         IntegerVector(as<IntegerVector>(Ymis[j])-1) :
-                                         IntegerVector(Range(0, mev.size()-1)) ); // 0-based indexes
-            const int Nmis = (no_meas_err ? mis.size() : mev.size());
+            // FIXME: Shouldn't Nmev == n ? Check and replace.
+            const NumericVector mevVec = (no_meas_err ? NumericVector() : as<NumericVector>(meas_err[j]));
+            const int Nmev = (no_meas_err ? 0 : mevVec.size() );
+            const double *mev = (no_meas_err ? NULL : mevVec.begin());
+            const IntegerVector misVec = (no_meas_err ?
+                                            IntegerVector(as<IntegerVector>(Ymis[j])-1) :
+                                            IntegerVector(Range(0, Nmev-1)) ); // 0-based indexes
+            const int *mis = misVec.begin();
+            const int Nmis = (no_meas_err ? misVec.size() : Nmev);
+            // Original observed scores
+            const double *obsScore = (no_meas_err ? NULL : as<NumericVector>(as<DataFrame>(env["Y"])).begin());
             
             // Adjust mu_j/sd_j for measurement error, as necessary
             VectorXd adj_mu_j;
@@ -254,7 +264,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
               
             } else {                                  // Variable j has measurement error
               // adj_sd_j <- 1/sqrt(1/sd_j^2 + mev)
-              adj_sd_j = (as<Eigen::Map<Eigen::ArrayXd> >(mev) + 1./(sd_j*sd_j)).rsqrt().matrix();
+              adj_sd_j = (as<Eigen::Map<Eigen::ArrayXd> >(mevVec) + 1./(sd_j*sd_j)).rsqrt().matrix();
               // adj_mu_j <- adj_sd_j^2 * (mu_j / sd_j^2  +  Y.obs.me[,j]*mev)
               adj_mu_j = adj_sd_j.array().square().matrix().cwiseProduct(mu_j / (sd_j*sd_j) +
                 as<Eigen::Map<VectorXd> >(as<NumericVector>(as<List>(env["Y.mev"])[j])) );
@@ -267,13 +277,12 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
               if (K[j] == 0)
               {
                 // Continuous case
-                NumericVector Yj = Y[j];
                 JUMP;
                 for (int i = 0; i < Nmis; i++)
                 {
                   COPY_I_TO_CNT;
                   const int I = mis[i];
-                  Yj[I] = Z(I,j) = moprobit::dist::rnorm(adj_mu_j[I], adj_sd_j[I], cnt, key);
+                  Yj_dbl[I] = Z(I,j) = moprobit::dist::rnorm(adj_mu_j[I], adj_sd_j[I], cnt, key);
                   mu(I,j) = (X.row(I) * beta.col(j))(0,0);
                   E(I,j) = Z(I,j) - mu(I,j);
                 }
@@ -281,14 +290,13 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
               else if (Ybool[j])
               {
                 // Logical case
-                LogicalVector Yj = Y[j];
                 JUMP;
                 for (int i = 0; i < Nmis; i++)
                 {
                   COPY_I_TO_CNT;
                   const int I = mis[i];
                   Z(I,j) = moprobit::dist::rnorm(mu_j[I], sd_j, cnt, key);
-                  Yj[I] = (Z(I,j) > 0);
+                  Yj_int[I] = (Z(I,j) > 0);
                   mu(I,j) = (X.row(I) * beta.col(j))(0,0);
                   E(I,j) = Z(I,j) - mu(I,j);
                 }
@@ -296,8 +304,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
               else
               {
                 // Factor case
-                IntegerVector Yj = Y[j];
-                const NumericVector tau_j = tau[j];
+                const double *tau_j = as<NumericVector>(tau[j]).begin();
                 JUMP;
                 for (int i = 0; i < Nmis; i++)
                 {
@@ -305,7 +312,9 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                   const int I = mis[i];
                   Z(I,j) = moprobit::dist::rnorm(mu_j[I], sd_j, cnt, key);
                   // factor(sapply(Z[mis, j], function(z) levels(env$Y[,j])[sum(z > tau[[j]])+1]), levels=levels(env$Y[,j]))
-                  Yj[I] = sum(Z(I,j) > tau_j) + 1;
+                  // Yj[I] = sum(Z(I,j) > tau_j) + 1;
+                  for (Yj_int[I] = 1; Yj_int[I] < K[j]; Yj_int[I]++)
+                    if (Z(I,j) < tau_j[Yj_int[I]-1]) break;
                   mu(I,j) = (X.row(I) * beta.col(j))(0,0);
                   E(I,j) = Z(I,j) - mu(I,j);
                 }
@@ -328,21 +337,23 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
               // Y.star
               // FIXME: Would be more efficient to copy only those variables relevant for the given update.formula
               DataFrame Ystar = DataFrame::create();
+              double *Ystar_j_dbl = NULL;
+              int *Ystar_j_int = NULL;
               // Y.star: -j part
               for (int J = 0; J < q; J++)
                 if (J != j)
                   switch (as<RObject>(Y[J]).sexp_type())
                   {
                   case LGLSXP:
-                    Ystar.push_back(as<LogicalVector>(as<LogicalVector>(Y[J])[mis]),
+                    Ystar.push_back(as<LogicalVector>(as<LogicalVector>(Y[J])[misVec]),
                                     as<std::string>(as<CharacterVector>(Y.names())[J]));
                     break;
                   case INTSXP:
-                    Ystar.push_back(as<IntegerVector>(as<IntegerVector>(Y[J])[mis]),
+                    Ystar.push_back(as<IntegerVector>(as<IntegerVector>(Y[J])[misVec]),
                                     as<std::string>(as<CharacterVector>(Y.names())[J]));
                     break;
                   case REALSXP:
-                    Ystar.push_back(as<NumericVector>(as<NumericVector>(Y[J])[mis]),
+                    Ystar.push_back(as<NumericVector>(as<NumericVector>(Y[J])[misVec]),
                                     as<std::string>(as<CharacterVector>(Y.names())[J]));
                     break;
                   default:
@@ -353,27 +364,29 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                   switch (as<RObject>(Xbase[J]).sexp_type())
                   {
                   case LGLSXP:
-                    Ystar.push_back(as<LogicalVector>(as<LogicalVector>(Xbase[J])[mis]),
+                    Ystar.push_back(as<LogicalVector>(as<LogicalVector>(Xbase[J])[misVec]),
                                     as<std::string>(as<CharacterVector>(Xbase.names())[J]));
                     break;
                   case INTSXP:
-                    Ystar.push_back(as<IntegerVector>(as<IntegerVector>(Xbase[J])[mis]),
+                    Ystar.push_back(as<IntegerVector>(as<IntegerVector>(Xbase[J])[misVec]),
                                     as<std::string>(as<CharacterVector>(Xbase.names())[J]));
                     break;
                   case REALSXP:
-                    Ystar.push_back(as<NumericVector>(as<NumericVector>(Xbase[J])[mis]),
+                    Ystar.push_back(as<NumericVector>(as<NumericVector>(Xbase[J])[misVec]),
                                     as<std::string>(as<CharacterVector>(Xbase.names())[J]));
                     break;
                   default:
                     break;
                   }
                 // Y.star: proposed outcome j
+                //   Note: This block is not thread-safe, but we're just copying memory, so probably won't parallelize
                 if (K[j] == 0)
                 {
                   NumericVector y(Nmis);
                   for (int i = 0; i < Nmis; i++)
                     y[i] = Zstar(i,j);
                   Ystar.push_back(y, as<std::string>(as<CharacterVector>(Y.names())[j]));
+                  Ystar_j_dbl = as<NumericVector>(Ystar[Ystar.ncol()-1]).begin();
                 }
                 else if (Ybool[j])
                 {
@@ -381,6 +394,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                   for (int i = 0; i < Nmis; i++)
                     y[i] = (Zstar(i,j) > 0);
                   Ystar.push_back(y, as<std::string>(as<CharacterVector>(Y.names())[j]));
+                  Ystar_j_int = as<LogicalVector>(Ystar[Ystar.ncol()-1]).begin();
                 }
                 else // factor
                 {
@@ -391,12 +405,14 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                   y.attr("class") = as<IntegerVector>(Y[j]).attr("class");
                   y.attr("levels") = as<IntegerVector>(Y[j]).attr("levels");
                   Ystar.push_back(y, as<std::string>(as<CharacterVector>(Y.names())[j]));
+                  Ystar_j_int = as<IntegerVector>(Ystar[Ystar.ncol()-1]).begin();
                 }
                 
                 // X.star: model.matrix(env$update.formulas[[j]], Y.star, env$update.constrasts[[j]])
-                const IntegerVector update_to = as<List>(env["update.to"])[j];
-                const IntegerVector update_from = as<List>(env["update.from"])[j];
-                const int Nupdate = update_to.size();
+                const IntegerVector update_to_vec = as<List>(env["update.to"])[j];
+                const int *update_to = update_to_vec.begin();
+                const int *update_from = as<IntegerVector>(as<List>(env["update.from"])[j]).begin();
+                const int Nupdate = update_to_vec.size();
                 // FIXME: Could we avoid passing through the R interface, here?
                 const NumericMatrix mm = modelmatrix(as<List>(env["update.formulas"])[j],
                                                      Ystar,
@@ -410,7 +426,9 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                 }
                 
                 // E.star
-                const IntegerVector update_cascade = as<List>(env["update.cascade"])[j];
+                const IntegerVector update_cascade_vec = as<List>(env["update.cascade"])[j];
+                const int *update_cascade = update_cascade_vec.begin();
+                const int Ncascade = update_cascade_vec.size();
                 const MatrixXd Estar = Zstar - Xstar * beta;
                 
                 // For each individual, calculate acceptance and update
@@ -420,8 +438,7 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                 {
                   COPY_I_TO_CNT;
                   const int I = mis[i];
-                  const NumericVector Yj = as<NumericVector>(as<DataFrame>(env["Y"])[j]);
-                  
+
                   // Calculate acceptance ratio
                   //  R <- dmvnorm(as.matrix(E.star), sigma = as.matrix(Sigma), log=T) -
                   //       dmvnorm(as.matrix(E[mis,]), sigma = as.matrix(Sigma), log=T) +
@@ -429,12 +446,13 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                   //       dnorm(Z.star[,j], mean = mu_j[mis], sd = sd_j, log=T)
                   const double R = -.5 *
                     ( (Estar.row(i) * Omega * Estar.row(i).transpose())(0,0) -
-                    (E.row(I) * Omega * E.row(I).transpose())(0,0) +
-                    ((no_meas_err || NumericVector::is_na(Yj[I])) ? 0 : 
-                       ( (Yj[I] - Zstar(i,j)) * (Yj[I] - Zstar(i,j)) -
-                         (Yj[I] - Z(I,j)) * (Yj[I] - Z(I,j)) ) * mev[I] ) +
-                         (Z(I,j) - adj_mu_j[I]) * (Z(I,j) - adj_mu_j[I]) / (adj_sd_j[I]*adj_sd_j[I]) -
-                         (Zstar(i,j) - adj_mu_j[I]) * (Zstar(i,j) - adj_mu_j[I]) / (adj_sd_j[I]*adj_sd_j[I]) );
+                      (E.row(I) * Omega * E.row(I).transpose())(0,0) +
+                      // If the original observed score is missing, we have set mev to 0 in init().
+                      ((no_meas_err || mev[I] == 0) ? 0 : 
+                       ( (obsScore[I] - Zstar(i,j)) * (obsScore[I] - Zstar(i,j)) -
+                         (obsScore[I] - Z(I,j)) * (obsScore[I] - Z(I,j)) ) * mev[I] ) +
+                      (Z(I,j) - adj_mu_j[I]) * (Z(I,j) - adj_mu_j[I]) / (adj_sd_j[I]*adj_sd_j[I]) -
+                      (Zstar(i,j) - adj_mu_j[I]) * (Zstar(i,j) - adj_mu_j[I]) / (adj_sd_j[I]*adj_sd_j[I]) );
                   
                   // Accept
 #ifdef PEDANTIC
@@ -450,18 +468,18 @@ List internal_iter(const List prior, int iters, int TMN_iters, bool fixSigma, bo
                     
                     // Y
                     if (K[j] == 0)
-                      as<NumericVector>(Y[j])[I] = as<NumericVector>(Ystar[Ystar.ncol()-1])[i];
-                    else if (Ybool[j])
-                      as<LogicalVector>(Y[j])[I] = as<LogicalVector>(Ystar[Ystar.ncol()-1])[i];
+                      Yj_dbl[I] = Ystar_j_dbl[i];
+//                    else if (Ybool[j])
+//                      Yj_int[I] = Ystar_j_int[i];
                     else
-                      as<IntegerVector>(Y[j])[I] = as<IntegerVector>(Ystar[Ystar.ncol()-1])[i];
+                      Yj_int[I] = Ystar_j_int[i];
                     
                     // X
                     for (int J = 0; J < Nupdate; J++)
                       X(I, update_to[J]-1) = Xstar(i, update_to[J]-1);
                     
                     // Downstream outcomes
-                    for (int J = 0; J < update_cascade.size(); J++)
+                    for (int J = 0; J < Ncascade; J++)
                     {
                       const int JJ = update_cascade[J]-1;
                       E(I,JJ) = Estar(i,JJ);
